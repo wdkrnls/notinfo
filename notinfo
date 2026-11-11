@@ -1,0 +1,92 @@
+#!/bin/sh
+# notinfo -- index and search Info manuals.
+#
+#   notinfo index  [--rebuild] [--lang=LANG] [--manual=NAME[,NAME...]]
+#   notinfo search [--context[=N]] [--point] [--debug] QUERY...
+#   notinfo render MANUAL
+#   notinfo view '(MANUAL)NODE'
+#
+# The database and its sidecars live in DIR/notinfo.db*, where DIR is
+# --db-path=DIR if given, else $NOTINFO_DB_DIR, else
+# ${XDG_DATA_HOME:-$HOME/.local/share}/notinfo.
+
+set -eu
+
+prog=${0##*/}
+bindir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+# Locate the .scm files.  Installed, this dispatcher sits beside them in
+# share/notinfo; in the source tree it sits beside them too.
+if [ -n "${NOTINFO_LIBDIR:-}" ] && [ -f "$NOTINFO_LIBDIR/notinfo-index.scm" ]; then
+    libdir=$NOTINFO_LIBDIR
+elif [ -f "$bindir/notinfo-index.scm" ]; then
+    libdir=$bindir
+elif [ -f "$bindir/../share/notinfo/notinfo-index.scm" ]; then
+    libdir=$bindir/../share/notinfo
+else
+    printf '%s: cannot find notinfo-index.scm near %s\n' "$prog" "$0" >&2
+    printf 'set NOTINFO_LIBDIR to the directory holding the .scm files\n' >&2
+    exit 1
+fi
+
+data_dir=${NOTINFO_DB_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/notinfo}
+
+usage() {
+    cat >&2 <<EOF
+usage: notinfo index  [--rebuild] [--lang=LANG] [--manual=NAME[,NAME...]]
+       notinfo search [--context[=N]] [--point] [--debug] QUERY...
+       notinfo render MANUAL
+       notinfo view '(MANUAL)NODE'
+
+  --db-path=DIR   where the database lives (default: $data_dir)
+EOF
+    exit 2
+}
+
+# Peel --db-path=DIR out of "$@", leaving the rest in order.
+n=$#
+while [ "$n" -gt 0 ]; do
+    a=$1
+    shift
+    case $a in
+        --db-path=*) data_dir=${a#--db-path=} ;;
+        *) set -- "$@" "$a" ;;
+    esac
+    n=$((n - 1))
+done
+
+[ $# -gt 0 ] || usage
+cmd=$1
+shift
+
+case $cmd in
+    index)
+        mkdir -p -- "$data_dir"
+        exec guile "$libdir/notinfo-index.scm" "$@" "$data_dir/notinfo.db"
+        ;;
+    search)
+        if [ ! -e "$data_dir/notinfo.db" ]; then
+            printf '%s: no database at %s\n' "$prog" "$data_dir/notinfo.db" >&2
+            printf 'run `notinfo index` to build it\n' >&2
+            exit 1
+        fi
+        exec guile "$libdir/notinfo-search.scm" "$data_dir/notinfo.db" "$@"
+        ;;
+    view)
+        if [ $# -eq 0 ]; then
+            printf '%s: view needs a node, as "(manual)Node"\n' "$prog" >&2
+            exit 2
+        fi
+        exec guile "$libdir/notinfo-search.scm" "$data_dir/notinfo.db" --view "$@"
+        ;;
+    render)
+        exec guile "$libdir/notinfo-index.scm" --render "$@"
+        ;;
+    -h|--help|help)
+        usage
+        ;;
+    *)
+        printf '%s: unknown subcommand: %s\n' "$prog" "$cmd" >&2
+        usage
+        ;;
+esac
