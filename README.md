@@ -24,7 +24,7 @@ Without Guix, from a checkout:
 Note that this will put the default database inside of:
 
 ```
-~/.config/
+~/.local/share/notinfo
 ```
 
 ## Usage
