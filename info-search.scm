@@ -7,6 +7,8 @@
 ;;;   --point          print the match's offset within its node instead of
 ;;;                    the context
 ;;;   --context[=N]    the match plus N symbols either side (default 1)
+;;;   --limit[=N]      number of search results to return
+;;;                    N of -1/0/inf/unlimited means return all results
 ;;;   --view '(M)NODE' print one node's stored text and exit
 ;;;
 ;;; One line per hit:
@@ -113,6 +115,17 @@
 ;;; ---- context -----------------------------------------------------------
 
 (define no-limit 100000000)
+
+;; Accepts N, inf, infinity, infinite, unlimited.  Zero or negative means no
+;; limit: a search for zero matches is never what you want.
+(define (parse-limit s)
+  (cond ((member s '("inf" "infinity" "infinite" "unlimited")) no-limit)
+        ((string->number s)
+         => (lambda (n) (let ((n (inexact->exact (truncate n))))
+                          (if (<= n 0) no-limit n))))
+        (else (format (current-error-port)
+                      "warning: bad --limit=~a; showing all matches~%" s)
+              no-limit)))
 
 (define (parse-max-width s)
   (cond ((member s '("inf" "infinity" "infinite" "unlimited")) no-limit)
@@ -234,7 +247,7 @@
 
 ;;; ---- search ------------------------------------------------------------
 
-(define* (search dbpath querystring #:key (pagesize 20) (debug? #f)
+(define* (search dbpath querystring #:key (limit no-limit) (debug? #f)
                  (max-width 80) (point? #f) (context #f))
   (let* ((sname (stem-name dbpath))
          (terms (query-words querystring))
@@ -258,7 +271,7 @@
                                    #:stemmer (stemmer-for sname)
                                    #:prefixes prefixes
                                    #:boolean? #t))
-               (mset (enquire-mset (enquire db query) #:maximum-items pagesize))
+               (mset (enquire-mset (enquire db query) #:maximum-items limit))
                (hits
                 (reverse
                  (mset-fold
@@ -294,47 +307,51 @@
 
 (define (usage program)
   (format (current-error-port)
-          "Usage: ~a DBPATH [--debug] [--max-width=N] [--point] [--context[=N]] QUERY...~%\
+          "Usage: ~a DBPATH [--debug] [--max-width=N] [--point] [--context[=N]] [--limit[=N]] QUERY...~%\
        ~a DBPATH --view '(MANUAL)NODE'~%"
           program program))
 
 (define (split-flags args)
   (let loop ((as args) (debug? #f) (max-width 80) (point? #f)
-             (context #f) (view #f) (terms '()))
+             (context #f) (limit no-limit) (view #f) (terms '()))
     (match as
-      (() (values debug? max-width point? context view (reverse terms)))
+      (() (values debug? max-width point? context limit view (reverse terms)))
       ((a . rest)
        (cond ((string=? a "--debug")
-              (loop rest #t max-width point? context view terms))
+              (loop rest #t max-width point? context limit view terms))
              ((string=? a "--point")
-              (loop rest debug? max-width #t context view terms))
+              (loop rest debug? max-width #t context limit view terms))
              ((string=? a "--context")
-              (loop rest debug? max-width point? 1 view terms))
+              (loop rest debug? max-width point? 1 limit view terms))
              ((string=? a "--view")
-              (loop rest debug? max-width point? context
+              (loop rest debug? max-width point? context limit
                     (if (pair? rest) (car rest) #f)
                     (if (pair? rest) (cdr rest) '())))
              ((string-match "^--view=(.*)$" a)
               => (lambda (m)
-                   (loop rest debug? max-width point? context
+                   (loop rest debug? max-width point? context limit
                          (match:substring m 1) terms)))
              ((string-match "^--context=(.*)$" a)
               => (lambda (m)
                    (let ((k (string->number (match:substring m 1))))
                      (loop rest debug? max-width point?
                            (if (and k (< 0 k)) (inexact->exact (truncate k)) 1)
-                           view terms))))
+                           limit view terms))))
+             ((string-match "^--limit=(.*)$" a)
+              => (lambda (m)
+                   (loop rest debug? max-width point? context
+                         (parse-limit (match:substring m 1)) view terms)))
              ((string-match "^--max-width=(.*)$" a)
               => (lambda (m)
                    (loop rest debug? (parse-max-width (match:substring m 1))
-                         point? context view terms)))
-             (else (loop rest debug? max-width point? context view
+                         point? context limit view terms)))
+             (else (loop rest debug? max-width point? context limit view
                          (cons a terms))))))))
 
 (match (command-line)
   ((_ dbpath . rest)
    (call-with-values (lambda () (split-flags rest))
-     (lambda (debug? max-width point? context view terms)
+     (lambda (debug? max-width point? context limit view terms)
        (cond
         (view
          (call-with-database dbpath
